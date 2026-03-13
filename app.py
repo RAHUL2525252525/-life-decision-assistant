@@ -1,63 +1,44 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 import json
 import os
 import requests
-
-import os
-import pathlib
-import requests
-
+from dotenv import load_dotenv
 from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
-from flask import Flask, session, redirect, url_for, request,flash
-
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-SECRET_KEY = os.getenv("SECRET_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-
-app = Flask(__name__)
-app.secret_key = SECRET_KEY
-
-USER_FILE = "users.json"
-import os
-from google_auth_oauthlib.flow import Flow
-
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-
-client_config = {
-    "web": {
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token"
-    }
-}
-
-GOOGLE_REDIRECT_URI = "http://127.0.0.1:5000/google/callback"
-
-flow = Flow.from_client_config(
-    client_config,
-    scopes=[
-        "https://www.googleapis.com/auth/userinfo.profile",
-        "https://www.googleapis.com/auth/userinfo.email",
-        "openid"
-    ],
-    redirect_uri=GOOGLE_REDIRECT_URI
-)
 
 # -------------------------------
-# USER DATABASE FUNCTIONS
+# CONFIGURATION & ENV
+# -------------------------------
+load_dotenv()
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "nexus_default_key")
+
+USER_FILE = "users.json"
+
+# API KEYS
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Google OAuth Setup
+GOOGLE_CLIENT_SECRETS_FILE = os.getenv("GOOGLE_CLIENT_SECRETS_FILE")
+SCOPES = [
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid"
+]
+
+def get_google_flow():
+    return Flow.from_client_secrets_file(
+        GOOGLE_CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:5000/google/callback")
+    )
+
+# -------------------------------
+# DATA PERSISTENCE
 # -------------------------------
 def load_users():
     if os.path.exists(USER_FILE):
@@ -68,214 +49,76 @@ def load_users():
             return {}
     return {}
 
-
 def save_users(users):
     with open(USER_FILE, "w") as f:
         json.dump(users, f, indent=4)
 
 # -------------------------------
-# OPENROUTER AI FUNCTION
+# INTELLIGENT AI ENGINE (WITH FALLBACK)
 # -------------------------------
-# -------------------------------
-# AI FUNCTIONS
-# -------------------------------
-
 def ask_groq(prompt):
-
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         data = {
             "model": "llama3-8b-8192",
-            "messages":[
-                {
-                    "role":"system",
-                    "content":"You are a friendly AI assistant. Use emojis, simple language, and bullet points."
-                },
-                {
-                    "role":"user",
-                    "content":prompt
-                }
+            "messages": [
+                {"role": "system", "content": "You are a friendly AI assistant. Use emojis, simple language, and bullet points."},
+                {"role": "user", "content": prompt}
             ]
         }
-
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-
-        return result["choices"][0]["message"]["content"]
-
-    except Exception as e:
-        print("Groq Failed:", e)
-        return None
-
+        response = requests.post(url, headers=headers, json=data, timeout=8)
+        return response.json()["choices"][0]["message"]["content"]
+    except: return None
 
 def ask_openrouter(prompt):
-
     try:
-
         url = "https://openrouter.ai/api/v1/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
-        }
-
+        headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
         data = {
             "model": "meta-llama/llama-3-8b-instruct",
-            "messages":[
-                {
-                    "role":"system",
-                    "content":"You are a helpful AI assistant. Use emojis and simple explanations."
-                },
-                {
-                    "role":"user",
-                    "content":prompt
-                }
-            ]
+            "messages": [{"role": "user", "content": prompt}]
         }
-
-        response = requests.post(url, headers=headers, json=data)
-        result = response.json()
-
-        return result["choices"][0]["message"]["content"]
-
-    except Exception as e:
-        print("OpenRouter Failed:", e)
-        return None
-
+        response = requests.post(url, headers=headers, json=data, timeout=8)
+        return response.json()["choices"][0]["message"]["content"]
+    except: return None
 
 def ask_gemini(prompt):
-
     try:
-
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-
-        data = {
-            "contents":[
-                {
-                    "parts":[
-                        {"text":prompt}
-                    ]
-                }
-            ]
-        }
-
-        response = requests.post(url, json=data)
-        result = response.json()
-
-        return result["candidates"][0]["content"]["parts"][0]["text"]
-
-    except Exception as e:
-        print("Gemini Failed:", e)
-        return None
-
-
-# -------------------------------
-# MAIN AI FUNCTION (AUTO SWITCH)
-# -------------------------------
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        response = requests.post(url, json=data, timeout=8)
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except: return None
 
 def ask_ai(prompt):
+    # Intelligent cascade: Groq -> OpenRouter -> Gemini
+    for engine in [ask_groq, ask_openrouter, ask_gemini]:
+        reply = engine(prompt)
+        if reply: return reply
+    return "⚠️ Neural Link Offline. All AI engines are currently unresponsive."
 
-    print("Trying GROQ AI...")
-    reply = ask_groq(prompt)
-
-    if reply:
-        return reply
-
-    print("Trying OPENROUTER AI...")
-    reply = ask_openrouter(prompt)
-
-    if reply:
-        return reply
-
-    print("Trying GEMINI AI...")
-    reply = ask_gemini(prompt)
-
-    if reply:
-        return reply
-
-    return "⚠️ AI engine failed. Please try again."
+# -------------------------------
+# AUTHENTICATION ROUTES
 # -------------------------------
 @app.route("/")
 def home():
     return redirect(url_for("login"))
-
-
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         email = request.form.get("email")
         password = request.form.get("password")
-
         users = load_users()
 
-        # Logic for "Identity not found" or "Invalid Password"
-        if email not in users:
-            flash("Identity not found in the Nexus.", "error")
-            return render_template("login.html")
+        if email in users and users[email].get("password") == password:
+            session['user'] = email
+            flash("Access Granted. Welcome to the Nexus.", "success")
+            return redirect(url_for('index'))
         
-        if users[email].get("password") != password:
-            flash("Invalid Keyphrase. Access Denied.", "error")
-            return render_template("login.html")
-
-        # Success path
-        session['user'] = email
-        flash("Access Granted. Welcome to the Nexus.", "success")
-        return redirect(url_for('index'))
-
+        flash("Identity not found or Invalid Keyphrase.", "error")
     return render_template("login.html")
-
-@app.route("/google/login")
-def google_login():
-
-    authorization_url, state = flow.authorization_url()
-
-    session["state"] = state
-
-    return redirect(authorization_url)
-
-@app.route("/google/callback")
-def google_callback():
-
-    flow.fetch_token(authorization_response=request.url)
-
-    credentials = flow.credentials
-
-    request_session = requests.session()
-
-    userinfo_endpoint = "https://www.googleapis.com/oauth2/v1/userinfo"
-
-    params = {"access_token": credentials.token}
-
-    userinfo_response = request_session.get(userinfo_endpoint, params=params)
-
-    user_info = userinfo_response.json()
-
-    email = user_info["email"]
-    name = user_info.get("name", "User")
-
-    session["user"] = email
-
-    users = load_users()
-
-    if email not in users:
-        users[email] = {
-            "name": name,
-            "password": "google_user",
-            "provider": "google"
-        }
-
-    save_users(users)
-
-    return redirect(url_for("index"))
-
-from flask import Flask, render_template, request, redirect, url_for, flash
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -283,298 +126,162 @@ def register():
         name = request.form.get("name")
         email = request.form.get("email")
         password = request.form.get("password")
-
         users = load_users()
 
-        # 1. Check if email already exists
         if email in users:
-            # Using 'error' category to match your CSS class .flash.error
-            flash("User already registered with this email. Please Login.", "error")
+            flash("Identity already registered.", "error")
             return render_template("register.html")
 
-        # 2. Create new user if it doesn't exist
-        users[email] = {
-            "name": name,
-            "password": password, # In a real app, use generate_password_hash(password)
-            "provider": "email"
-        }
-
+        users[email] = {"name": name, "password": password, "provider": "email"}
         save_users(users)
+        flash("Registration successful!", "success")
+        return redirect(url_for("login"))
+    return render_template("register.html")
+    
+@app.route("/forgot-password", methods=["GET","POST"])
+def forgot_password():
+    if request.method == "POST":
+        email = request.form.get("email")
+        new_password = request.form.get("new_password")
+        confirm_password = request.form.get("confirm_password")
+        users = load_users()
 
-        flash("Registration successful! Welcome to the Nexus.", "success")
+        if email not in users:
+            flash("Identity not found in the Nexus.", "error")
+            return redirect(url_for("forgot_password"))
+
+        if new_password != confirm_password:
+            flash("Keyphrases do not match. Try again.", "error")
+            return redirect(url_for("forgot_password"))
+
+        # Update password
+        users[email]["password"] = new_password
+        save_users(users)
+        flash("Keyphrase successfully reset! You can now login.", "success")
         return redirect(url_for("login"))
 
-    return render_template("register.html")
+    # GET request
+    return render_template("forgot_password.html")
+
 # -------------------------------
-# DASHBOARD
+# GOOGLE OAUTH
+# -------------------------------
+@app.route("/google/login")
+def google_login():
+    flow = get_google_flow()
+    authorization_url, state = flow.authorization_url()
+    session["state"] = state
+    return redirect(authorization_url)
+
+@app.route("/google/callback")
+def google_callback():
+    flow = get_google_flow()
+    flow.fetch_token(authorization_response=request.url)
+    credentials = flow.credentials
+    
+    userinfo_endpoint = "https://www.googleapis.com/oauth2/v1/userinfo"
+    user_info = requests.get(userinfo_endpoint, params={"access_token": credentials.token}).json()
+    
+    email = user_info["email"]
+    name = user_info.get("name", "User")
+    session["user"] = email
+    
+    users = load_users()
+    if email not in users:
+        users[email] = {"name": name, "password": "google_user", "provider": "google"}
+        save_users(users)
+    return redirect(url_for("index"))
+
+# -------------------------------
+# PAGE ROUTES (GET)
 # -------------------------------
 @app.route("/index")
 def index():
-
-    if "user" not in session:
-        return redirect(url_for("login"))
-
+    if "user" not in session: return redirect(url_for("login"))
     users = load_users()
-
-    email = session["user"]
-
-    name = users.get(email, {}).get("name", "User")
-
+    name = users.get(session["user"], {}).get("name", "User")
     return render_template("index.html", name=name)
-# def index():
-#     if "user" not in session:
-#         return redirect(url_for("login"))
-#     users = load_users()
-#     name = users[session["user"]]["name"]
-#     return render_template("index.html", name=name)
+
+@app.route("/career")
+def career():
+    if "user" not in session: return redirect(url_for("login"))
+    return render_template("career.html")
+
+@app.route("/decision")
+def decision():
+    if "user" not in session: return redirect(url_for("login"))
+    return render_template("decision.html")
+
+@app.route("/goalplanner")
+def goalplanner():
+    if "user" not in session: return redirect(url_for("login"))
+    return render_template("goalplanner.html")
+
+@app.route("/skillgap")
+def skillgap():
+    if "user" not in session: return redirect(url_for("login"))
+    return render_template("skillgap.html")
+
+@app.route("/comparison")
+def comparison():
+    if "user" not in session: return redirect(url_for("login"))
+    return render_template("comparison.html")
+
+@app.route("/chatbot")
+def chatbot():
+    if "user" not in session: return redirect(url_for("login"))
+    return render_template("chatbot.html")
 
 # -------------------------------
-# CAREER TOOL
-# -------------------------------
-@app.route("/career", methods=["GET", "POST"])
-def career():
-    if "user" not in session:
-        return redirect(url_for("login"))
-    return render_template("career.html")
-# -------------------------------
-# CAREER API (AJAX)
+# AI API ROUTES (POST)
 # -------------------------------
 @app.route("/career_api", methods=["POST"])
 def career_api():
-    if "user" not in session:
-        return jsonify({"reply": "Please login first."})
-
+    if "user" not in session: return jsonify({"reply": "Session expired."})
     data = request.get_json()
+    prompt = f"Career advisor. Interest: {data.get('interest')}, Skills: {data.get('skills')}. Provide Roadmap."
+    return jsonify({"reply": ask_ai(prompt)})
 
-    interest = data.get("interest", "")
-    skills = data.get("skills", "")
-
-    prompt = f"""
-You are a friendly career advisor.
-
-User Interest: {interest}
-User Skills: {skills}
-
-Give a very simple and clear answer.
-
-Use this format exactly:
-
-🎯 **Best Career**
-Write one short sentence suggesting the best career.
-
-💡 **Why This Career**
-• Reason 1  
-• Reason 2  
-• Reason 3  
-
-📚 **Skills to Learn**
-• Skill 1  
-• Skill 2  
-• Skill 3  
-
-🚀 **Simple Roadmap**
-1️⃣ Step 1  
-2️⃣ Step 2  
-3️⃣ Step 3  
-
-Rules:
-- Use simple English
-- Keep answers short
-- Use emojis
-- Use bullet points
-- Make it easy for beginners
-"""
-
-    reply = ask_ai(prompt)
-
-    return jsonify({"reply": reply})
-# -------------------------------
-# DECISION TOOL
-# -------------------------------
-@app.route("/decision", methods=["GET", "POST"])
-def decision():
-    if "user" not in session:
-        return redirect(url_for("login"))
-    return render_template("decision.html")
-
-# ---- Decision API ----
 @app.route("/decision_api", methods=["POST"])
 def decision_api():
+    if "user" not in session: return jsonify({"reply": "Session expired."})
     data = request.get_json()
-    situation = data.get("situation")
+    # Keep your custom Decision logic
+    prompt = f"Professional life decision advisor. Situation: {data.get('situation')}"
+    return jsonify({"reply": ask_ai(prompt)})
 
-    try:
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "openai/gpt-4o-mini",
-                "temperature": 0.7,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": """
-You are a professional life decision advisor.
-Rules:
-- Give clear human-style reasoning.
-- NEVER use tags like [ANALYSIS].
-- Do not write system logs or debug messages.
-- Format strictly: 
-  • Insight 1
-  • Insight 2
-  • Insight 3
-Decision: Final recommendation with explanation.
-"""
-                    },
-                    {"role": "user", "content": f"My situation: {situation}"}
-                ]
-            }
-        )
-
-        result = response.json()
-        ai_reply = result["choices"][0]["message"]["content"]
-
-        return jsonify({"reply": ai_reply})
-
-    except Exception as e:
-        print("AI ERROR:", e)
-        return jsonify({"reply": "❌ AI could not process the decision. Try again."})
-    
-# -------------------------------
-@app.route("/goalplanner", methods=["GET", "POST"])
-def goalplanner():
-    if "user" not in session:
-        return redirect(url_for("login"))
-    return render_template("goalplanner.html")
-
-# -------------------------------
-# GOAL PLANNER API
-# -------------------------------
 @app.route("/goalplanner_api", methods=["POST"])
 def goalplanner_api():
-    if "user" not in session:
-        return jsonify({"reply": "❌ Please login first."})
-
+    if "user" not in session: return jsonify({"reply": "Session expired."})
     data = request.get_json()
-    goal = data.get("goal", "").strip()
-
-    if not goal:
-        return jsonify({"reply": "⚠️ Please provide a valid goal."})
-
-    prompt = f"""
-    Create a clear step-by-step plan to achieve this goal:
-    {goal}.
-    Include milestones, timeline, and tips. Add emojis for clarity.
-    """
-
-    reply = ask_ai(prompt)
-    return jsonify({"reply": reply})
-
-# -------------------------------
-# SKILL GAP ANALYZER
-# -------------------------------
-@app.route("/skillgap", methods=["GET", "POST"])
-def skillgap():
-    if "user" not in session:
-        return redirect(url_for("login"))
-    return render_template("skillgap.html")
+    prompt = f"Create step-by-step plan for: {data.get('goal')}. Include milestones."
+    return jsonify({"reply": ask_ai(prompt)})
 
 @app.route("/skillgap_api", methods=["POST"])
 def skillgap_api():
+    if "user" not in session: return jsonify({"reply": "Session expired."})
     data = request.get_json()
-    career = data.get("career", "")
-    skills = data.get("skills", "")
-    prompt = f"""
-    For a career in {career}, analyze the skill gaps if someone
-    currently has these skills: {skills}.
-    Suggest important skills to learn. Present the answer with bullets, emojis, and spaces for clarity.
-    """
-    reply = ask_ai(prompt)
-    return jsonify({"reply": reply})
-
-# -------------------------------
-# COMPARISON TOOL
-@app.route("/comparison")
-def comparison():
-    if "user" not in session:
-        return redirect(url_for("login"))  # make sure login exists
-    return render_template("comparison.html")
+    prompt = f"Analyze skill gaps for {data.get('career')} based on {data.get('skills')}."
+    return jsonify({"reply": ask_ai(prompt)})
 
 @app.route("/compare_api", methods=["POST"])
 def compare_api():
-
-    if "user" not in session:
-        return jsonify({"reply": "❌ Please login first."})
-
+    if "user" not in session: return jsonify({"reply": "Session expired."})
     data = request.get_json()
-
-    option1 = data.get("option1","")
-    option2 = data.get("option2","")
-    goal = data.get("goal","")
-
-    prompt = f"""
-You are a helpful decision assistant.
-
-Compare these two options in very simple English.
-
-Option A: {option1}
-Option B: {option2}
-
-User Goal: {goal}
-
-Give the answer in this format:
-
-🅰️ Option A
-Explain in 1–2 short lines.
-
-🅱️ Option B
-Explain in 1–2 short lines.
-
-🎯 Final Suggestion
-Choose ONLY ONE option (A or B).
-Clearly say which option is BEST for the user's goal and give 1 short reason.
-
-Rules:
-- Use simple language
-- Keep answers short
-- Be clear and confident
-- Always choose ONE final option
-"""
-
-    reply = ask_ai(prompt)
-
-    return jsonify({"reply": reply})
-# -------------------------------
-# CHATBOT
-# -------------------------------
-@app.route("/chatbot")
-def chatbot():
-    if "user" not in session:
-        return redirect(url_for("login"))
-    return render_template("chatbot.html")
+    prompt = f"Compare A: {data.get('option1')} and B: {data.get('option2')} for Goal: {data.get('goal')}."
+    return jsonify({"reply": ask_ai(prompt)})
 
 @app.route("/chatbot_api", methods=["POST"])
 def chatbot_api():
-    if "user" not in session:
-        return jsonify({"reply": "Login required"})
+    if "user" not in session: return jsonify({"reply": "Login required"})
     data = request.get_json()
-    message = data.get("message", "")
-    reply = ask_ai(message)
-    return jsonify({"reply": reply})
+    return jsonify({"reply": ask_ai(data.get("message", ""))})
 
-# -------------------------------
-# LOGOUT
-# -------------------------------
 @app.route("/logout")
 def logout():
-    session.pop("user", None)
+    session.clear()
     return redirect(url_for("login"))
 
-# -------------------------------
-# RUN SERVER
-# -------------------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
